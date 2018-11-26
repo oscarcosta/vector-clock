@@ -1,5 +1,5 @@
 ----------------------------- MODULE VectorClocks -----------------------------
-EXTENDS Integers
+EXTENDS Integers, TLC, Sequences
 CONSTANTS Procs, MAX
 
 (*
@@ -10,8 +10,6 @@ variables
 define
   \* returns the maximum value for each element of two vectors
   Max(v1, v2) == [p \in Procs |-> IF v1[p] > v2[p] THEN v1[p] ELSE v2[p]]
-  \* increments by 1 the 'e' element of the vector 'v' 
-  Increment(e, v) == [p \in Procs |-> IF p = e THEN v[p] + 1 ELSE v[p]]
 end define;
 
 fair process VectorClock \in Procs
@@ -19,13 +17,16 @@ variables
   vc = [p \in Procs |-> 0] \* Initially all clocks are zero
 begin Main:
   while vc[self] < MAX do
-    either Receive: \* increments local clock and calcs maximum of two clocks
-      vc := Increment(self, Max(vc, msgs[self]));
+    either Internal: \* increments local clock 
+      vc[self] := vc[self] + 1;
     or Send: \* increments local clock and sends it to another process
       vc[self] := vc[self] + 1;
       with p \in Procs \ {self} do \* send vc to 'p' via msgs[p] 
         msgs[p] := vc;
       end with;
+    or Receive: \* increments local clock and calcs maximum of two clocks
+      vc := Max(vc, msgs[self]);
+      goto Internal; \*vc[self] := vc[self] + 1;
     end either;
   end while;
 end process;
@@ -37,8 +38,6 @@ VARIABLES msgs, pc
 
 (* define statement *)
 Max(v1, v2) == [p \in Procs |-> IF v1[p] > v2[p] THEN v1[p] ELSE v2[p]]
-
-Increment(e, v) == [p \in Procs |-> IF p = e THEN v[p] + 1 ELSE v[p]]
 
 VARIABLE vc
 
@@ -54,15 +53,16 @@ Init == (* Global variables *)
 
 Main(self) == /\ pc[self] = "Main"
               /\ IF vc[self][self] < MAX
-                    THEN /\ \/ /\ pc' = [pc EXCEPT ![self] = "Receive"]
+                    THEN /\ \/ /\ pc' = [pc EXCEPT ![self] = "Internal"]
                             \/ /\ pc' = [pc EXCEPT ![self] = "Send"]
+                            \/ /\ pc' = [pc EXCEPT ![self] = "Receive"]
                     ELSE /\ pc' = [pc EXCEPT ![self] = "Done"]
               /\ UNCHANGED << msgs, vc >>
 
-Receive(self) == /\ pc[self] = "Receive"
-                 /\ vc' = [vc EXCEPT ![self] = Increment(self, Max(vc[self], msgs[self]))]
-                 /\ pc' = [pc EXCEPT ![self] = "Main"]
-                 /\ msgs' = msgs
+Internal(self) == /\ pc[self] = "Internal"
+                  /\ vc' = [vc EXCEPT ![self][self] = vc[self][self] + 1]
+                  /\ pc' = [pc EXCEPT ![self] = "Main"]
+                  /\ msgs' = msgs
 
 Send(self) == /\ pc[self] = "Send"
               /\ vc' = [vc EXCEPT ![self][self] = vc[self][self] + 1]
@@ -70,7 +70,13 @@ Send(self) == /\ pc[self] = "Send"
                    msgs' = [msgs EXCEPT ![p] = vc'[self]]
               /\ pc' = [pc EXCEPT ![self] = "Main"]
 
-VectorClock(self) == Main(self) \/ Receive(self) \/ Send(self)
+Receive(self) == /\ pc[self] = "Receive"
+                 /\ vc' = [vc EXCEPT ![self] = Max(vc[self], msgs[self])]
+                 /\ pc' = [pc EXCEPT ![self] = "Internal"]
+                 /\ msgs' = msgs
+
+VectorClock(self) == Main(self) \/ Internal(self) \/ Send(self)
+                        \/ Receive(self)
 
 Next == (\E self \in Procs: VectorClock(self))
            \/ (* Disjunct to prevent deadlock on termination *)
@@ -83,10 +89,10 @@ Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
 \* END TRANSLATION
 
-\* Boundedness
+\* Invariants
 VectorClockOK == (\A k,l \in Procs: vc[k][k] >= vc[l][k])
 
-================================================================================
+===============================================================================
 \* Modification History
-\* Last modified Sun Nov 25 18:51:00 PST 2018 by ocosta
+\* Last modified Sun Nov 25 21:39:03 PST 2018 by ocosta
 \* Created Sat Nov 17 15:07:39 PST 2018 by ocosta
